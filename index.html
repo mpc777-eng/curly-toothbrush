@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Curly Toothbrush</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Curly Teeth">
+<meta name="theme-color" content="#5cc8c0">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#3b8f8a;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  canvas{display:block;width:100vw;height:100vh}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(#9fe6df,#c9f3ee 60%,#ffd6e7 60%,#ffc2da);font-family:"Chalkboard SE","Comic Sans MS",system-ui,sans-serif;z-index:5}
+  #start h1{font-size:9vmin;margin:0 0 2vmin;color:#fff;text-align:center;text-shadow:0 .6vmin 0 #2f7f7a}
+  #start .big{font-size:20vmin;line-height:1}
+  #play{margin-top:4vmin;font-size:11vmin;padding:2.5vmin 11vmin;border:none;border-radius:8vmin;background:#ffcc33;color:#5a3a00;box-shadow:0 1.2vmin 0 #c99400;font-family:inherit}
+  #play:active{transform:translateY(1vmin);box-shadow:0 .2vmin 0 #c99400}
+  #turn{display:none;position:fixed;inset:0;z-index:9;background:#5cc8c0;color:#fff;flex-direction:column;align-items:center;justify-content:center;font-family:"Chalkboard SE","Comic Sans MS",sans-serif}
+  #turn .ph{font-size:30vmin;animation:rot 2s ease-in-out infinite}
+  @keyframes rot{0%,30%{transform:rotate(0)}60%,100%{transform:rotate(-90deg)}}
+  @media (orientation:portrait){#turn{display:flex}}
+</style>
+</head>
+<body>
+<div id="turn"><div class="ph">📱</div><div style="font-size:14vmin">🔄 🐶</div></div>
+<div id="start">
+  <div class="big">🐶🪥✨</div>
+  <h1>Curly Toothbrush</h1>
+  <button id="play">▶</button>
+</div>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+const Q = new URLSearchParams(location.search);
+const ICON = Q.has("icon");
+const W = 1024, H = 768;
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let scale = 1, offX = 0, offY = 0, dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  if (ICON) { cv.width = 512; cv.height = 512; cv.style.width = "512px"; cv.style.height = "512px"; return; }
+  cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  offX = (innerWidth - W * scale) / 2; offY = (innerHeight - H * scale) / 2;
+}
+addEventListener("resize", resize); resize();
+const worldT = () => ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const rnd = (a, b) => a + Math.random() * (b - a);
+// ================= sound =================
+let ac = null, master = null, noiseBuf = null;
+function initAudio() {
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume();
+    master = ac.createGain(); master.gain.value = 0.9; master.connect(ac.destination);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 3, ac.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { ac = null; }
+}
+function tone(freq, dur, type = "sine", vol = 0.25, slide = 0, delay = 0) {
+  if (!ac) return;
+  const t = ac.currentTime + Math.max(0, delay), o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, freq, vol, type = "lowpass", delay = 0, attack = 0.01) {
+  if (!ac) return;
+  const t = ac.currentTime + delay, s = ac.createBufferSource(); s.buffer = noiseBuf;
+  const f = ac.createBiquadFilter(); f.type = type; f.frequency.value = freq;
+  const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(master); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.05);
+}
+const sfx = {
+  woof: () => { tone(420, 0.12, "sawtooth", 0.12, -200); tone(380, 0.12, "sawtooth", 0.12, -180, 0.18); },
+  yip: () => { tone(700, 0.1, "sawtooth", 0.09, -250); },
+  giggle: () => { for (let i = 0; i < 5; i++) tone(900 + (i % 2) * 180 + Math.random() * 60, 0.08, "triangle", 0.1, 120, i * 0.09); },
+  scrub: () => noise(0.12, 2600 + Math.random() * 1500, 0.06, "bandpass"),
+  ding: (n = 0) => { tone(1047 * Math.pow(1.06, n), 0.3, "sine", 0.18); tone(1568 * Math.pow(1.06, n), 0.35, "sine", 0.1, 0, 0.06); },
+  ping: (n = 0) => { tone(1200 + n * 90, 0.25, "triangle", 0.16); tone(2400 + n * 180, 0.15, "sine", 0.05, 0, 0.03); },
+  sparkle: () => { [1047, 1319, 1568, 2093].forEach((f, i) => tone(f, 0.18, "sine", 0.1, 0, i * 0.06)); },
+  pop: () => tone(500 + Math.random() * 300, 0.07, "sine", 0.12, 400),
+  water: () => noise(0.25, 900 + Math.random() * 400, 0.08, "lowpass"),
+  gargle: () => { for (let i = 0; i < 8; i++) tone(180 + Math.random() * 60, 0.07, "square", 0.05, 30, i * 0.07); },
+  spit: () => { noise(0.18, 1800, 0.25, "bandpass"); tone(300, 0.15, "sine", 0.15, -150); },
+  splash: () => { noise(0.4, 1200, 0.2, "lowpass", 0.05); [900, 1200, 800].forEach((f, i) => tone(f, 0.08, "sine", 0.06, 300, 0.1 + i * 0.07)); },
+  boing: () => tone(260, 0.5, "sine", 0.25, 500),
+  step: () => tone(160, 0.05, "sine", 0.06),
+  whoosh: () => noise(0.4, 1500, 0.12, "bandpass", 0, 0.15),
+  yay: () => { [523, 659, 784, 1047, 784, 1047].forEach((f, i) => tone(f, 0.25, "triangle", 0.2, 0, i * 0.12)); },
+  door: () => { tone(880, 0.2, "sine", 0.15); tone(660, 0.35, "sine", 0.15, 0, 0.2); },
+};
+const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
+const SONG = { step: 0.3, bass: [48, 0, 55, 0, 53, 0, 55, 0], mel: [72, 76, 79, 76, 77, 0, 74, 0, 72, 76, 79, 84, 81, 0, 79, 0], bv: 0.045, mv: 0.03 };
+let songOn = false, songStep = 0, nextNote = 0;
+function musicTick() {
+  if (!ac || !songOn) return;
+  while (nextNote < ac.currentTime + 0.15) {
+    const d = nextNote - ac.currentTime, b = SONG.bass[songStep % 8], m = SONG.mel[songStep % 16];
+    if (b) tone(mtof(b), 0.5, "triangle", SONG.bv, 0, d);
+    if (m) tone(mtof(m), 0.4, "sine", SONG.mv, 0, d);
+    nextNote += SONG.step; songStep++;
+  }
+}
+// ================= voice =================
+let lastSay = "";
+function say(t, opt = {}) {
+  lastSay = t; window.__said.push(t);
+  try {
+    if (opt.soft && speechSynthesis.speaking) return;
+    if (!opt.queue) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t.replace(/[^\w\s!?,.']/g, ""));
+    u.lang = "en-US"; u.rate = 0.88; u.pitch = 1.2;
+    const v = speechSynthesis.getVoices().find(v => /Samantha|Karen|Moira|Tessa|Google US English/.test(v.name));
+    if (v) u.voice = v;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+window.__said = [];
+// ================= state =================
+// scenes: walk -> hop -> brush -> floss -> rinse -> spit -> give -> home
+let scene = "start", st = 0, time = 0, fade = 0, fadeDir = 0, fadeCb = null, idle = 0, nagT = 0;
+let parts = [], foam = [], teeth = [], gaps = [], stars = 0;
+let ptr = { x: 700, y: 650, down: false, px: 0, py: 0, seen: false };
+let curly = { x: -120, y: 600, walk: 0, wag: 0, hop: 0 };
+let water = 0, rinseHeld = 0, gave = false, giveT = 0, playAgain = false, flags = new Set(), happyT = 0;
+const once = (k) => (flags.has(k) ? false : (flags.add(k), true));
+const MX = 512, MY = 455, MRX = 215, MRY = 140;     // Curly's open mouth (close-up)
+function makeTeeth() {
+  teeth = []; gaps = [];
+  for (let row = 0; row < 2; row++) for (let i = 0; i < 6; i++) {
+    const u = (i - 2.5) / 2.5, x = MX + u * 150, y = row === 0 ? MY - MRY + 42 + u * u * 26 : MY + MRY - 42 - u * u * 26;
+    teeth.push({ x, y, row, dirt: 1, clean: false, bug: Math.random() < 0.7, ph: Math.random() * 6, spots: [[rnd(-12, 12), rnd(-14, 14)], [rnd(-12, 12), rnd(-14, 14)]] });
+  }
+  for (let row = 0; row < 2; row++) for (let i = 0; i < 5; i++) {
+    const a = teeth[row * 6 + i], b = teeth[row * 6 + i + 1];
+    gaps.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, done: false });
+  }
+}
+function fadeTo(cb) { fadeDir = 1; fadeCb = cb; }
+function go(s) { scene = s; st = 0; idle = 0; nagT = 0; }
+function resetGame() {
+  parts = []; foam = []; stars = 0; water = 0; rinseHeld = 0; gave = false; giveT = 0; playAgain = false; flags.clear();
+  curly = { x: -120, y: 600, walk: 0, wag: 0, hop: 0 }; makeTeeth(); go("walk"); songOn = true; if (ac) nextNote = ac.currentTime + 0.1;
+  say("Curly is going to the dentist today!");
+}
+function burst(x, y, n, kind = "spark") {
+  const cols = ["#ff5e7e", "#ffcc33", "#5cd65c", "#4db8ff", "#b77cff", "#ff9a3c"];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = rnd(80, kind === "confetti" ? 520 : 300);
+    parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (kind === "confetti" ? 300 : 60), life: rnd(0.8, 1.6), max: 1.6, kind, c: cols[i % 6], r: rnd(5, 11), rot: Math.random() * 6 });
+  }
+}
+function bubble(x, y) { parts.push({ x, y, vx: rnd(-30, 30), vy: rnd(-90, -30), life: rnd(0.6, 1.2), max: 1.2, kind: "bubble", r: rnd(5, 13) }); }
+function addFoam(x, y) {
+  if (foam.length > 140) return;
+  const dx = (x - MX) / MRX, dy = (y - MY) / MRY; if (dx * dx + dy * dy > 1.05) return;
+  foam.push({ x: x + rnd(-18, 18), y: y + rnd(-18, 18), r: rnd(9, 20), a: 1 });
+}
+function curlyHappy(big) { happyT = 1.2; if (big) { sfx.woof(); } else if (Math.random() < 0.5) sfx.giggle(); else sfx.yip(); }
+// ================= input =================
+function toWorld(e) { return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale }; }
+cv.addEventListener("pointerdown", e => { const p = toWorld(e); ptr.x = ptr.px = p.x; ptr.y = ptr.py = p.y; ptr.down = true; ptr.seen = true; tap(p); });
+addEventListener("pointermove", e => { const p = toWorld(e); ptr.x = p.x; ptr.y = p.y; ptr.seen = true; });
+addEventListener("pointerup", () => { ptr.down = false; });
+addEventListener("pointercancel", () => { ptr.down = false; });
+const near = (p, x, y, r) => Math.hypot(p.x - x, p.y - y) < r;
+function tap(p) {
+  if (scene === "walk" && st > 1.5 && near(p, curly.x, curly.y - 70, 170)) { startHop(); }
+  else if (scene === "give" && !gave) { giveBrush(); }
+  else if (scene === "home" && playAgain && near(p, W / 2, 380, 170)) { sfx.woof(); fadeTo(() => resetGame()); }
+  else if (scene === "walk" || scene === "home" || scene === "spit") { curlyHappy(false); burst(p.x, p.y, 8); }
+}
+function startHop() { if (scene !== "walk") return; go("hop"); curly.hx0 = curly.x; sfx.boing(); say("Hop up, Curly!"); }
+function giveBrush() { gave = true; giveT = 0; sfx.whoosh(); }
+// ================= update =================
+function update(dt) {
+  time += dt; st += dt; idle += dt; nagT += dt; happyT = Math.max(0, happyT - dt);
+  curly.wag += dt * (happyT > 0 ? 22 : 10);
+  if (fadeDir) { fade = clamp(fade + fadeDir * dt * 2.2, 0, 1); if (fade >= 1 && fadeDir > 0) { fadeDir = -1; const c = fadeCb; fadeCb = null; c && c(); } if (fade <= 0 && fadeDir < 0) fadeDir = 0; }
+  for (const q of parts) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; if (q.kind === "confetti") { q.vy += 500 * dt; q.vx *= 0.99; q.rot += dt * 6; } else if (q.kind === "drop") q.vy += 1400 * dt; else if (q.kind === "bubble") q.vx += Math.sin(time * 5 + q.r) * 4; else q.vy += 120 * dt; }
+  parts = parts.filter(q => q.life > 0);
+  const mv = Math.hypot(ptr.x - ptr.px, ptr.y - ptr.py); const moved = ptr.down ? mv : 0; ptr.px = ptr.x; ptr.py = ptr.y;
+  if (scene === "walk") {
+    if (curly.x < 420) { curly.x += 160 * dt; curly.walk += dt * 12; if (Math.random() < dt * 3) sfx.step(); }
+    else if (once("arrive")) { curlyHappy(true); say("Tap Curly to help him hop into the dentist chair!", { queue: true }); }
+    if (st > 11) startHop();
+  } else if (scene === "hop") {
+    const k = clamp(st / 0.9, 0, 1); curly.x = lerp(curly.hx0, 640, k); curly.y = lerp(600, 470, k) - Math.sin(k * Math.PI) * 160;
+    if (k >= 1 && once("sat")) { curlyHappy(true); burst(640, 360, 20); say("You are the dentist! Curly, open wide! Ahhh!", { queue: true }); }
+    if (st > 4.2 && once("toBrush")) fadeTo(() => { go("brush"); say("Rub the toothbrush on Curly's teeth. Scrub away the sugar bugs!"); });
+  } else if (scene === "brush") {
+    if (moved > 0) {
+      let hit = false;
+      for (const t of teeth) if (!t.clean && Math.hypot(ptr.x - t.x, ptr.y - t.y) < 75) {
+        hit = true; t.dirt -= moved * 0.0045;
+        if (t.dirt <= 0) { t.dirt = 0; t.clean = true; stars++; sfx.ding(stars); burst(t.x, t.y, 14); if (t.bug) burst(t.x, t.y, 4, "bug"); if (stars % 3 === 0) curlyHappy(false); }
+      }
+      if (hit || Math.random() < 0.3) { idle = 0; addFoam(ptr.x, ptr.y); if (Math.random() < 0.5) bubble(ptr.x, ptr.y); if (Math.random() < 0.25) sfx.scrub(); if (Math.random() < 0.012) sfx.giggle(); }
+    }
+    if (stars === 6 && once("half")) say("Great brushing! Keep going!", { soft: true });
+    if (stars >= 12 && once("brushDone")) { sfx.yay(); burst(MX, MY, 40); curlyHappy(true); say("Sparkly clean! Now let's floss!"); flags.add("bd"); st = 0; }
+    if (flags.has("brushDone") && st > 2.8 && once("toFloss")) { go("floss"); say("Slide the floss between Curly's teeth!", { queue: true }); }
+    nag("Rub, rub, rub! Scrub the sugar bugs!", () => teeth.find(t => !t.clean));
+  } else if (scene === "floss") {
+    if (ptr.down) for (const g of gaps) if (!g.done && Math.hypot(ptr.x - g.x, ptr.y - g.y) < 55) {
+      g.done = true; idle = 0; const n = gaps.filter(q => q.done).length; sfx.ping(n); burst(g.x, g.y, 10); if (n % 4 === 0) curlyHappy(false);
+    }
+    const n = gaps.filter(q => q.done).length;
+    if (n >= gaps.length && once("flossDone")) { sfx.yay(); burst(MX, MY, 30); curlyHappy(true); say("Great flossing! Now rinse with water. Press and hold the cup!"); st = 0; }
+    if (flags.has("flossDone") && st > 1.2 && once("toRinse")) go("rinse");
+    if (!flags.has("flossDone")) nag("Slide the floss in the little spaces!", () => gaps.find(g => !g.done));
+  } else if (scene === "rinse") {
+    if (ptr.down && st > 0.3) {
+      idle = 0; rinseHeld += dt; water = Math.min(1, water + dt * 0.6);
+      if (Math.random() < dt * 8) sfx.water();
+      for (let i = 0; i < 3; i++) foam.splice(Math.floor(Math.random() * foam.length), foam.length ? 1 : 0);
+      if (Math.random() < dt * 3) sfx.gargle();
+      for (let i = 0; i < 2; i++) parts.push({ x: MX + 120 + rnd(-6, 6), y: MY - 230, vx: rnd(-160, -110), vy: rnd(120, 220), life: 0.7, max: 0.7, kind: "drop", r: rnd(6, 10) });
+    }
+    if (rinseHeld > 2.2 && foam.length === 0 && once("rinseDone")) { sfx.gargle(); say("Swish, swish! Now spit, Curly!"); fadeTo(() => go("spit")); }
+    nag("Press and hold the water cup!", () => null);
+  } else if (scene === "spit") {
+    if (st > 1.2 && once("spit1")) { sfx.spit(); for (let i = 0; i < 14; i++) parts.push({ x: 640 + 78, y: 410, vx: rnd(180, 300), vy: rnd(-260, -120), life: 1, max: 1, kind: "drop", r: rnd(5, 9) }); }
+    if (st > 1.8 && once("splash")) { sfx.splash(); curlyHappy(false); say("Ptooey! Good spitting, Curly!", { queue: true }); }
+    if (st > 4.2 && once("toGive")) fadeTo(() => { go("give"); say("Give Curly a brand new toothbrush! Tap the toothbrush!"); });
+  } else if (scene === "give") {
+    if (!gave && st > 9) giveBrush();
+    if (gave) {
+      giveT += dt;
+      if (giveT > 0.8 && once("got")) { sfx.yay(); sfx.woof(); burst(700, 340, 70, "confetti"); burst(700, 360, 20); curlyHappy(true); say("Good job, Curly!"); say("What a sparkly smile!", { queue: true }); }
+      if (giveT > 0.8 && Math.random() < dt * 4) burst(rnd(150, 900), rnd(60, 200), 6, "confetti");
+      if (giveT > 6 && once("toHome")) fadeTo(() => { go("home"); curly.x = 60; curly.y = 715; say("Curly goes home happy! Hop, hop, hop!"); });
+    }
+  } else if (scene === "home") {
+    if (curly.x < 740) { curly.x += 150 * dt; curly.y = lerp(715, 612, clamp(curly.x / 740, 0, 1)); curly.walk += dt * 10; curly.hop = Math.abs(Math.sin(st * 5)) * 50; if (Math.random() < dt * 1.2) sfx.yip(); }
+    else { curly.hop *= 0.85; if (once("home")) { sfx.door(); curlyHappy(true); burst(760, 500, 40, "confetti"); say("Curly is home! Bye bye, dentist! See you next time!"); } }
+    if (flags.has("home") && !playAgain && st > 0) { if (!flags.has("pa")) { flags.add("pa"); curly.paT = st; } if (st - curly.paT > 3) playAgain = true; }
+  }
+}
+function nag(line, target) {
+  if (idle > 6 && nagT > 9) { nagT = 0; say(line, { soft: true }); }
+}
+function circle(x, y, r, c) { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+function ellipse(x, y, rx, ry, c, rot = 0) { ctx.fillStyle = c; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); ctx.fill(); }
+function rect(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); }
+function rrect(x, y, w, h, r, c) { ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); ctx.fill(); }
+function emoji(ch, x, y, size, rot = 0) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.font = `${size}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(ch, 0, 0); ctx.restore();
+}
+function text(s, x, y, size, c, align = "center") { ctx.font = `bold ${size}px "Chalkboard SE","Comic Sans MS",sans-serif`; ctx.fillStyle = c; ctx.textAlign = align; ctx.textBaseline = "middle"; ctx.fillText(s, x, y); }
+// Curly: little fluffy black dog (from Curly's Pineapples), with a red collar
+function drawCurly(x, y, d, o = {}) {
+  ctx.save();
+  if (o.spin) { ctx.translate(x, y - 55); ctx.rotate(Math.sin(o.spin) * 0.35); ctx.translate(-x, -(y - 55)); }
+  const walk = o.walk || 0, lying = !!o.lying;
+  const leg = Math.sin(walk) * 11;
+  if (!lying) {
+    for (const [dx, s] of [[-28, 1], [-14, -1], [18, 1], [32, -1]]) {
+      ctx.save(); ctx.translate(x + dx, y - 30);
+      ctx.rotate(o.air ? (dx < 0 ? 0.7 : -0.7) * d : s * leg * 0.05);
+      rrect(-6, 0, 12, 30, 5, "#151515"); ctx.restore();
+    }
+  }
+  const by = lying ? y - 26 : y - 52 - (o.run ? Math.abs(Math.sin(walk)) * 5 : 0);
+  for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; circle(x + Math.cos(a) * 40, by + Math.sin(a) * 20, 17, "#1c1c1c"); }
+  ellipse(x, by, 46, 26, "#222");
+  for (let i = 0; i < 7; i++) circle(x - 30 + i * 10, by - 8 + (i % 2) * 8, 5, "#333");
+  const wag = Math.sin(o.wag || 0) * 0.6;
+  ctx.save(); ctx.translate(x - 44 * d, by - 10); ctx.rotate(-0.8 * d + wag);
+  circle(0, -14, 9, "#1c1c1c"); circle(0, -26, 8, "#1c1c1c"); ctx.restore();
+  const hx = x + 46 * d, hy = by - (lying ? 14 : 30);
+  // collar
+  ctx.strokeStyle = "#e5303f"; ctx.lineWidth = 9; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(hx - 22 * d, hy + 16); ctx.lineTo(hx - 6 * d, hy + 26); ctx.stroke();
+  circle(hx - 8 * d, hy + 33, 6, "#ffd23f");
+  for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; circle(hx + Math.cos(a) * 22, hy + Math.sin(a) * 20, 12, "#1c1c1c"); }
+  circle(hx, hy, 26, "#232323");
+  ellipse(hx + 22 * d, hy + 10, 16, 12, "#2c2c2c");
+  circle(hx + 34 * d, hy + 6, 6, "#000");
+  const ear = o.air ? -0.9 : o.run ? Math.sin(walk) * 0.35 : 0;
+  ellipse(hx - 16 * d, hy + 6 + (o.air ? -10 : 0), 10, 20, "#111", (0.3 + ear) * d);
+  if (o.sleepy) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(hx + 8 * d, hy - 6, 5, 0.1 * Math.PI, 0.9 * Math.PI); ctx.stroke(); }
+  else if (o.spin) { text("@", hx + 8 * d, hy - 6, 16, "#fff"); }
+  else {
+    circle(hx + 8 * d, hy - 6, 6, "#fff"); circle(hx + 9 * d, hy - 6, 3.5, "#000"); circle(hx + 10 * d, hy - 8, 1.3, "#fff");
+    if (o.brave) { ctx.strokeStyle = "#555"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(hx + 1 * d, hy - 17); ctx.lineTo(hx + 15 * d, hy - 14); ctx.stroke(); }
+  }
+  if (o.tongue) ellipse(hx + 24 * d, hy + 25, 6, 9, "#ff7b9c");
+  if (o.open) { // mouth open wide (dentist chair)
+    ellipse(hx + 26 * d, hy + 20, 15, 13, "#7a1830"); ellipse(hx + 26 * d, hy + 27, 10, 5, "#ff7b9c");
+    rrect(hx + 18 * d - 4, hy + 8, 8, 6, 2, "#fff"); rrect(hx + 30 * d - 4, hy + 8, 8, 6, 2, "#fff"); }
+  if (o.grin) { ctx.strokeStyle = "#ff9ab3"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(hx + 22 * d, hy + 14, 12, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    rrect(hx + 16 * d - 6, hy + 20, 12, 7, 3, "#fff"); }
+  if (o.brush) { ctx.save(); ctx.translate(hx + 30 * d, hy + 22); ctx.rotate(-0.15 * d); rrect(-34, -5, 68, 10, 5, "#3fa7ff"); rrect(d > 0 ? 18 : -34, -14, 16, 10, 3, "#fff"); ctx.restore(); }
+  ctx.restore();
+}
+// ================= drawing =================
+function star(x, y, r, c, rot = 0) {
+  ctx.fillStyle = c; ctx.beginPath();
+  for (let i = 0; i < 10; i++) { const a = rot - Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+  ctx.closePath(); ctx.fill();
+}
+function line(x1, y1, x2, y2, w, c) { ctx.strokeStyle = c; ctx.lineWidth = w; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+const RAINBOW = ["#ff4d6d", "#ff9f1c", "#ffe14d", "#4cd964", "#3fa7ff", "#a66bff"];
+const SKIN = "#f6cfa8", HAIR = "#6b3f1f";
+// the dentist: a little girl, long brown hair with a rainbow stripe, white coat over a purple dress
+function drawGirl(x, y, s, o = {}) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  const bob = Math.sin(time * 3) * 2;
+  // long hair (back)
+  ctx.fillStyle = HAIR; ctx.beginPath(); ctx.moveTo(-58, -235); ctx.quadraticCurveTo(-78, -150, -60, -105); ctx.quadraticCurveTo(0, -92, 60, -105); ctx.quadraticCurveTo(78, -150, 58, -235); ctx.closePath(); ctx.fill();
+  RAINBOW.forEach((c, i) => { ctx.strokeStyle = c; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-50 + i * 5, -240); ctx.quadraticCurveTo(-70 + i * 5, -160, -55 + i * 5, -104); ctx.stroke(); });
+  // legs + shoes
+  rrect(-26, -72, 18, 70, 8, SKIN); rrect(8, -72, 18, 70, 8, SKIN);
+  ellipse(-20, -4, 18, 10, "#ff5fa2"); ellipse(20, -4, 18, 10, "#ff5fa2");
+  // dress + coat
+  ctx.fillStyle = "#9b5de5"; ctx.beginPath(); ctx.moveTo(-34, -178); ctx.lineTo(34, -178); ctx.lineTo(56, -66); ctx.lineTo(-56, -66); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(-40, -180); ctx.lineTo(-10, -180); ctx.lineTo(-14, -62); ctx.lineTo(-60, -62); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(40, -180); ctx.lineTo(10, -180); ctx.lineTo(14, -62); ctx.lineTo(60, -62); ctx.closePath(); ctx.fill();
+  rrect(-40, -125, 18, 20, 5, "#ffe6f0"); // pocket with a tooth
+  ellipse(-31, -117, 6, 6, "#fff");
+  // arms
+  const armL = o.hold ? -1.25 : 0.25, armR = o.wave ? -2.4 + Math.sin(time * 9) * 0.35 : -0.25;
+  for (const [sx, a] of [[-38, armL], [38, armR]]) {
+    ctx.save(); ctx.translate(sx, -170); ctx.rotate(a); rrect(-11, 0, 22, 62, 10, "#fff"); circle(0, 68, 12, SKIN); ctx.restore();
+  }
+  // neck + head
+  rrect(-10, -195, 20, 20, 6, SKIN);
+  circle(0, -235 + bob * 0.3, 50, SKIN);
+  const hy = -235 + bob * 0.3;
+  // bangs
+  ctx.fillStyle = HAIR; ctx.beginPath(); ctx.arc(0, hy - 6, 54, Math.PI * 1.02, Math.PI * 1.98); ctx.quadraticCurveTo(20, hy - 30, 0, hy - 24); ctx.quadraticCurveTo(-30, hy - 34, -54, hy - 4); ctx.fill();
+  // front lock with rainbow stripe
+  ctx.fillStyle = HAIR; ctx.beginPath(); ctx.moveTo(38, hy - 40); ctx.quadraticCurveTo(66, hy + 20, 52, hy + 100); ctx.lineTo(36, hy + 96); ctx.quadraticCurveTo(48, hy + 20, 26, hy - 30); ctx.fill();
+  RAINBOW.forEach((c, i) => { ctx.strokeStyle = c; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(30 + i * 2.4, hy - 34); ctx.quadraticCurveTo(54 + i * 2, hy + 20, 40 + i * 2.2, hy + 96); ctx.stroke(); });
+  star(-36, hy - 40, 11, "#ffcc33");
+  // face
+  const blink = (time % 3.4) < 0.12;
+  for (const ex of [-18, 16]) { if (blink) line(ex - 6, hy, ex + 6, hy, 3, "#2b1a10"); else { ellipse(ex, hy, 6, 8, "#2b1a10"); circle(ex + 2, hy - 3, 2, "#fff"); } }
+  circle(-30, hy + 16, 8, "rgba(255,120,150,.45)"); circle(30, hy + 16, 8, "rgba(255,120,150,.45)");
+  ctx.strokeStyle = "#c2405a"; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.arc(-1, hy + 14, 13, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+  // what she holds
+  if (o.hold && !o.gave) {
+    const hx = -38 + Math.sin(1.25) * 68, hyy = -170 + Math.cos(1.25) * 68;
+    const pulse = 1 + Math.sin(time * 6) * 0.08;
+    ctx.save(); ctx.translate(hx, hyy); ctx.scale(pulse, pulse);
+    circle(0, 0, 70, "rgba(255,240,120,.35)");
+    drawToothbrushIcon(0, 0, 1.1); ctx.restore();
+  }
+  ctx.restore();
+}
+function drawToothbrushIcon(x, y, s) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.rotate(-0.5);
+  rrect(-50, -7, 90, 14, 7, "#3fa7ff"); rrect(32, -12, 34, 12, 4, "#fff");
+  for (let i = 0; i < 5; i++) rrect(34 + i * 6, -24, 4, 13, 2, i % 2 ? "#7fd8ff" : "#fff");
+  star(-20, 0, 6, "#ffe14d"); ctx.restore();
+  ctx.save(); ctx.translate(x - 8, y + 8); ctx.fillStyle = "#ff5e7e"; ellipse(-8, 0, 10, 6, "#ff5e7e", 0.5); ellipse(8, 0, 10, 6, "#ff5e7e", -0.5); circle(0, 0, 5, "#ff2d5a"); ctx.restore();
+}
+function drawBadge() {
+  ctx.save(); circle(84, 92, 66, "#fff"); circle(84, 92, 60, "#ffe6f0");
+  ctx.beginPath(); ctx.arc(84, 92, 60, 0, Math.PI * 2); ctx.clip();
+  drawGirl(84, 290, 0.95, {}); ctx.restore();
+  star(140, 140, 16, "#ffcc33");
+}
+// ---------- the office (side view) ----------
+function drawOffice(sink) {
+  const g = ctx.createLinearGradient(0, 0, 0, 600); g.addColorStop(0, "#b6efe8"); g.addColorStop(1, "#dff8f4"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, 600);
+  for (let x = 0; x < W; x += 64) rect(x, 0, 3, 600, "rgba(255,255,255,.35)");
+  for (let x = 0; x < W; x += 80) for (let r = 0; r < 3; r++) rect(x + (r % 2) * 40, 600 + r * 56, 40, 56, (Math.floor(x / 40) + r) % 2 ? "#ffd1e3" : "#fff4f8");
+  rect(0, 590, W, 14, "#7fd1c8");
+  // window
+  rrect(380, 70, 220, 170, 16, "#fff"); rect(394, 84, 192, 142, "#8fd3ff"); circle(560, 120, 24, "#ffe14d");
+  ellipse(450, 170, 40, 18, "#fff"); ellipse(480, 160, 30, 16, "#fff"); line(490, 84, 490, 226, 6, "#fff");
+  // poster: happy tooth
+  rrect(120, 90, 140, 170, 14, "#ffefb0");
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(150, 130); ctx.quadraticCurveTo(190, 110, 230, 130); ctx.quadraticCurveTo(240, 200, 220, 230); ctx.quadraticCurveTo(205, 200, 190, 215); ctx.quadraticCurveTo(175, 200, 160, 230); ctx.quadraticCurveTo(140, 200, 150, 130); ctx.fill();
+  circle(178, 160, 5, "#333"); circle(202, 160, 5, "#333"); ctx.strokeStyle = "#e5303f"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(190, 172, 10, 0.1 * Math.PI, 0.9 * Math.PI); ctx.stroke();
+  star(240, 110, 12, "#ffcc33");
+  // door (left)
+  rrect(-10, 250, 110, 350, 10, "#f7a8c4"); circle(80, 430, 8, "#ffcc33");
+  // lamp
+  line(820, 0, 820, 110, 10, "#9aa"); line(820, 110, 700, 170, 10, "#9aa"); ellipse(690, 180, 46, 22, "#fff"); ellipse(690, 188, 34, 10, "#ffe98a");
+  // chair
+  rrect(612, 500, 56, 100, 10, "#6fbfb8"); ellipse(640, 600, 90, 14, "#5aa9a2");
+  rrect(520, 470, 220, 44, 22, "#3fb8af"); // seat
+  ctx.save(); ctx.translate(550, 480); ctx.rotate(-0.25); rrect(-30, -200, 58, 210, 26, "#3fb8af"); ctx.restore();
+  if (sink) { rrect(800, 470, 20, 130, 6, "#ddd"); ellipse(810, 470, 70, 26, "#fff"); ellipse(810, 466, 52, 16, "#bfe9ff"); line(850, 430, 850, 456, 7, "#bbb"); line(850, 430, 830, 430, 7, "#bbb"); }
+}
+// ---------- the close-up: Curly's big open mouth ----------
+function drawCloseupBg() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#c6f4ee"); g.addColorStop(1, "#ffe0ec"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 9; i++) circle((i * 137) % W, 60 + (i * 89) % 600, 30, "rgba(255,255,255,.35)");
+  // lamp glow
+  ctx.fillStyle = "rgba(255,240,150,.28)"; ctx.beginPath(); ctx.moveTo(900, 70); ctx.lineTo(MX - 230, MY - 120); ctx.lineTo(MX + 230, MY + 160); ctx.closePath(); ctx.fill();
+  line(1000, 0, 930, 50, 14, "#9aa"); ellipse(910, 62, 56, 30, "#fff", -0.5); ellipse(905, 70, 40, 14, "#ffe98a", -0.5);
+  rrect(MX - 280, 80, 560, 720, 120, "#3fb8af"); // chair headrest/back
+}
+function drawCurlyFace() {
+  const happy = happyT > 0;
+  // tail wagging behind the chair
+  ctx.save(); ctx.translate(MX + 300, 640); ctx.rotate(-0.6 + Math.sin(curly.wag) * 0.5); circle(0, -30, 22, "#1c1c1c"); circle(0, -60, 18, "#1c1c1c"); ctx.restore();
+  // body + paws
+  ellipse(MX, 760, 300, 140, "#1e1e1e");
+  // ears
+  for (const sx of [-1, 1]) { ctx.save(); ctx.translate(MX + sx * 250, 250); ctx.rotate(sx * (0.25 + Math.sin(curly.wag * 0.5) * 0.05)); ellipse(0, 90, 70, 150, "#141414"); for (let i = 0; i < 6; i++) circle(rnd0(i) * 50 - 25, 30 + i * 30, 26, "#1a1a1a"); ctx.restore(); }
+  // fluffy head
+  for (let i = 0; i < 22; i++) { const a = i / 22 * Math.PI * 2; circle(MX + Math.cos(a) * 270, 380 + Math.sin(a) * 255, 50, "#1f1f1f"); }
+  ellipse(MX, 380, 285, 270, "#232323");
+  for (let i = 0; i < 14; i++) circle(MX - 210 + (i % 7) * 70, 150 + Math.floor(i / 7) * 40 + (i % 2) * 12, 22, "#2c2c2c");
+  // collar
+  ctx.strokeStyle = "#e5303f"; ctx.lineWidth = 28; ctx.beginPath(); ctx.arc(MX, 380, 290, 0.25 * Math.PI, 0.75 * Math.PI); ctx.stroke(); circle(MX, 690, 20, "#ffd23f");
+  ellipse(MX - 250, 735, 70, 40, "#151515"); ellipse(MX + 250, 735, 70, 40, "#151515");
+  // eyes
+  for (const sx of [-1, 1]) {
+    const ex = MX + sx * 115, ey = 195;
+    if (happy) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 9; ctx.beginPath(); ctx.arc(ex, ey + 10, 24, 1.15 * Math.PI, 1.85 * Math.PI); ctx.stroke(); }
+    else { circle(ex, ey, 36, "#fff"); circle(ex + sx * -2, ey + 4, 22, "#3a2410"); circle(ex, ey + 4, 13, "#000"); circle(ex + 8, ey - 6, 7, "#fff"); }
+  }
+  circle(MX - 210, 300, 28, "rgba(255,120,160,.35)"); circle(MX + 210, 300, 28, "rgba(255,120,160,.35)");
+  // nose
+  ellipse(MX, 268, 52, 34, "#050505"); ellipse(MX - 14, 258, 14, 8, "#555");
+  // mouth
+  ellipse(MX, MY, MRX + 14, MRY + 14, "#111");
+  ellipse(MX, MY, MRX, MRY, "#8a1c34");
+  ellipse(MX, MY + 10, MRX * 0.6, MRY * 0.45, "#5a0f22");
+  ellipse(MX, MY + 70 + Math.sin(time * 4) * 4, 115, 52, "#ff7b9c"); line(MX, MY + 40, MX, MY + 90, 4, "#e05a7e");
+  if (water > 0) { ctx.globalAlpha = water * 0.6; ellipse(MX, MY + 60, 150, 50 + Math.sin(time * 9) * 5, "#7fd0ff"); ctx.globalAlpha = 1; }
+  // teeth
+  for (const t of teeth) {
+    const c = t.dirt > 0.02 ? `rgb(255,${Math.round(255 - t.dirt * 20)},${Math.round(255 - t.dirt * 110)})` : "#fff";
+    if (t.row === 0) rrect(t.x - 25, t.y - 40, 50, 66, 18, c); else rrect(t.x - 25, t.y - 26, 50, 66, 18, c);
+    if (t.clean) { ctx.globalAlpha = 0.6 + Math.sin(time * 6 + t.ph) * 0.4; star(t.x + 12, t.y - 10, 7, "#fffbd0"); ctx.globalAlpha = 1; }
+    if (t.dirt > 0) {
+      ctx.globalAlpha = t.dirt; for (const [sx, sy] of t.spots) circle(t.x + sx, t.y + sy, 7, "#e8c23a"); ctx.globalAlpha = 1;
+      if (t.bug) { // a silly sugar bug
+        const s = 0.5 + t.dirt * 0.5, bx = t.x + Math.sin(time * 3 + t.ph) * 6, by = t.y + Math.cos(time * 4 + t.ph) * 4;
+        ctx.save(); ctx.translate(bx, by); ctx.scale(s, s);
+        ellipse(0, 0, 17, 14, t.ph > 3 ? "#8be04e" : "#c77dff");
+        line(-6, -12, -10, -22, 2, "#333"); line(6, -12, 10, -22, 2, "#333");
+        circle(-6, -3, 5, "#fff"); circle(6, -3, 5, "#fff"); circle(-6, -2, 2.5, "#000"); circle(6, -2, 2.5, "#000");
+        ctx.strokeStyle = "#333"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 4, 5, 0.1 * Math.PI, 0.9 * Math.PI); ctx.stroke(); ctx.restore();
+      }
+    }
+  }
+  if (scene === "floss") for (const g of gaps) {
+    if (g.done) star(g.x, g.y + (g.y < MY ? -48 : 48), 10, "#5cd65c");
+    else { ctx.globalAlpha = 0.5 + Math.sin(time * 6) * 0.3; circle(g.x, g.y, 10, "#7dffb0"); ctx.globalAlpha = 1; }
+  }
+  for (const f of foam) { ctx.globalAlpha = 0.9; circle(f.x, f.y, f.r, "#fff"); circle(f.x - f.r * 0.3, f.y - f.r * 0.3, f.r * 0.35, "#e8f7ff"); }
+  ctx.globalAlpha = 1;
+}
+function rnd0(i) { const s = Math.sin(i * 91.7) * 4375.5; return s - Math.floor(s); }
+function drawArm(tool) {
+  let x = ptr.seen ? ptr.x : 760, y = ptr.seen ? ptr.y : 620;
+  if (tool === "squirt") { x = MX + 130; y = MY - 240; }
+  const a = 0.55, ca = Math.cos(a), sa = Math.sin(a);
+  const hx = x + ca * 150, hy = y + sa * 150;
+  line(hx + 10, hy + 10, hx + 400, hy + 330, 90, "#fff"); line(hx + 10, hy + 10, hx + 400, hy + 330, 76, "#f4f4ff");
+  RAINBOW.forEach((c, i) => line(hx + 44 + i * 5, hy + 38 + i * 4, hx + 44 + i * 5 + 1, hy + 38 + i * 4 + 1, 30, c)); // rainbow scrunchie
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  if (tool === "brush") {
+    rrect(30, -11, 150, 22, 11, "#ff6fb1"); rrect(-28, -14, 64, 20, 6, "#fff");
+    for (let i = 0; i < 7; i++) rrect(-26 + i * 9, -30, 6, 18, 3, i % 2 ? "#7fd8ff" : "#fff");
+    star(110, 0, 7, "#ffe14d");
+  } else if (tool === "floss") {
+    line(0, -38, 0, 38, 3, "#e8fff6");
+    ctx.strokeStyle = "#4cd964"; ctx.lineWidth = 10; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(0, -42); ctx.quadraticCurveTo(50, -50, 60, 0); ctx.quadraticCurveTo(50, 50, 0, 42); ctx.stroke();
+    rrect(56, -9, 120, 18, 9, "#4cd964");
+  } else {
+    rrect(-20, -16, 160, 32, 14, "#4db8ff"); ctx.beginPath(); ctx.fillStyle = "#cfefff"; ctx.moveTo(-20, -8); ctx.lineTo(-44, 0); ctx.lineTo(-20, 8); ctx.fill();
+  }
+  ctx.restore();
+  circle(hx, hy, 34, SKIN); for (let i = 0; i < 4; i++) circle(hx - 22 + i * 4, hy - 26 + i * 15, 12, SKIN);
+}
+function drawStars(n, total) {
+  rrect(W / 2 - total * 27 - 14, 14, total * 54 + 28, 64, 32, "rgba(255,255,255,.75)");
+  for (let i = 0; i < total; i++) { const x = W / 2 + (i - (total - 1) / 2) * 54; star(x, 46, 22, i < n ? "#ffc61a" : "#d8d8e8"); if (i < n) star(x - 5, 41, 6, "#fff5b0"); }
+}
+function drawHint(tx, ty, kind) {
+  if (idle < 5 || !tx) return;
+  ctx.globalAlpha = 0.75; const dx = kind === "rub" ? Math.sin(time * 8) * 40 : 0, dy = kind === "rub" ? 0 : Math.sin(time * 5) * 20;
+  emoji("👆", tx + dx + 10, ty + dy + 50, 70); ctx.globalAlpha = 1;
+}
+function drawCup() {
+  const p = 1 + Math.sin(time * 5) * 0.06 * (ptr.down ? 0 : 1);
+  ctx.save(); ctx.translate(890, 620); ctx.scale(p, p);
+  circle(0, 0, 110, ptr.down ? "rgba(120,210,255,.6)" : "rgba(255,255,255,.7)");
+  ctx.fillStyle = "#ff9ac6"; ctx.beginPath(); ctx.moveTo(-55, -60); ctx.lineTo(55, -60); ctx.lineTo(42, 65); ctx.lineTo(-42, 65); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "#6fd0ff"; ctx.beginPath(); ctx.moveTo(-50, -30); ctx.lineTo(50, -30); ctx.lineTo(42, 58); ctx.lineTo(-42, 58); ctx.closePath(); ctx.fill();
+  circle(-15, 0, 8, "#bff0ff"); circle(14, 22, 6, "#bff0ff");
+  ctx.restore();
+}
+function drawParticles() {
+  for (const q of parts) {
+    const a = clamp(q.life / q.max * 1.5, 0, 1); ctx.globalAlpha = a;
+    if (q.kind === "spark") star(q.x, q.y, q.r, q.c, q.rot);
+    else if (q.kind === "confetti") { ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot); rect(-q.r, -q.r * 0.4, q.r * 2, q.r * 0.8, q.c); ctx.restore(); }
+    else if (q.kind === "bubble") { ctx.strokeStyle = "#9bdcff"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(q.x, q.y, q.r, 0, Math.PI * 2); ctx.stroke(); circle(q.x - q.r * 0.35, q.y - q.r * 0.35, q.r * 0.25, "#fff"); }
+    else if (q.kind === "drop") circle(q.x, q.y, q.r, "#5cc2ff");
+    else if (q.kind === "bug") { ellipse(q.x, q.y, 14, 11, "#8be04e"); circle(q.x - 4, q.y - 2, 3, "#fff"); circle(q.x + 4, q.y - 2, 3, "#fff"); }
+  }
+  ctx.globalAlpha = 1;
+}
+function drawHome() {
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#ffb88c"); g.addColorStop(0.55, "#ffe0a8"); g.addColorStop(0.56, "#7ccf5b"); g.addColorStop(1, "#5aae3e"); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  circle(180, 150, 60, "#fff1a8"); ellipse(420, 120, 70, 24, "#fff"); ellipse(700, 90, 60, 20, "#fff");
+  ellipse(250, 440, 300, 80, "#8ad86a"); ellipse(700, 450, 360, 70, "#93df72");
+  ctx.fillStyle = "#e9c48a"; ctx.beginPath(); ctx.moveTo(0, 690); ctx.quadraticCurveTo(400, 600, 780, 600); ctx.lineTo(820, 620); ctx.quadraticCurveTo(420, 650, 0, 768); ctx.fill();
+  for (let i = 0; i < 8; i++) { const fx = 60 + i * 120, fy = 700 + (i % 2) * 30; circle(fx, fy, 9, RAINBOW[i % 6]); circle(fx, fy, 4, "#fff"); }
+  // cozy house
+  rect(700, 360, 260, 250, "#ffd27f"); ctx.fillStyle = "#e5533f"; ctx.beginPath(); ctx.moveTo(670, 370); ctx.lineTo(830, 230); ctx.lineTo(990, 370); ctx.fill();
+  rect(900, 250, 34, 80, "#b5533f"); for (let i = 0; i < 3; i++) { ctx.globalAlpha = 0.5; ellipse(918 + Math.sin(time + i) * 10, 220 - i * 30 - (time * 20) % 30, 16, 12, "#fff"); } ctx.globalAlpha = 1;
+  rrect(760, 470, 80, 140, 36, "#ffb347"); rect(768, 480, 64, 130, "#ffe9a8"); circle(820, 545, 5, "#b5533f");
+  rrect(870, 420, 70, 60, 8, "#fff"); rect(876, 426, 58, 48, "#fff7c0"); line(905, 426, 905, 474, 4, "#fff");
+  circle(745, 590, 18, "#ff6fb1"); circle(955, 590, 18, "#b77cff");
+  // Curly
+  const c = curly;
+  drawCurly(c.x, c.y - c.hop, 1, { run: c.hop > 5, walk: c.walk, wag: c.wag * 1.8, brush: true, air: c.hop > 30 });
+  if (playAgain) {
+    const p = 1 + Math.sin(time * 4) * 0.05; ctx.save(); ctx.translate(W / 2, 380); ctx.scale(p, p);
+    circle(0, 8, 115, "#c99400"); circle(0, 0, 115, "#ffcc33");
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 22; ctx.lineCap = "round"; ctx.beginPath(); ctx.arc(0, 0, 55, -0.3 * Math.PI, 1.4 * Math.PI); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(30, -78); ctx.lineTo(70, -40); ctx.lineTo(18, -30); ctx.fill(); ctx.restore();
+  }
+}
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#2f7f7a"; ctx.fillRect(0, 0, cv.width, cv.height);
+  worldT(); ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  if (scene === "start" || scene === "walk" || scene === "hop") {
+    drawOffice(false);
+    drawGirl(880, 640, 1.15, { wave: true });
+    const sit = scene === "hop" && st > 0.9;
+    drawCurly(curly.x, curly.y, 1, { run: scene === "walk" && curly.x < 420, walk: curly.walk, wag: curly.wag, tongue: !sit, open: sit, air: scene === "hop" && st < 0.9 });
+    if (scene === "walk" && curly.x >= 420) { ctx.globalAlpha = 0.5 + Math.sin(time * 6) * 0.3; ctx.strokeStyle = "#ffe14d"; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(curly.x, curly.y - 70, 110, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1; if (st > 4) emoji("👆", curly.x + 40, curly.y - 20 + Math.sin(time * 6) * 12, 70); }
+  } else if (scene === "brush" || scene === "floss" || scene === "rinse") {
+    drawCloseupBg(); drawCurlyFace();
+    if (scene === "brush") { drawStars(stars, 12); const t = teeth.find(t => !t.clean); t && drawHint(t.x, t.y, "rub"); drawParticles(); drawArm("brush"); }
+    if (scene === "floss") { drawStars(gaps.filter(g => g.done).length, 10); const g = gaps.find(g => !g.done); g && drawHint(g.x, g.y, "slide"); drawParticles(); drawArm("floss"); }
+    if (scene === "rinse") { drawCup(); drawParticles(); if (ptr.down) drawArm("squirt"); if (idle > 4) emoji("👆", 900, 690 + Math.sin(time * 6) * 12, 70); }
+    drawBadge();
+  } else if (scene === "spit") {
+    drawOffice(true); drawGirl(960, 640, 1.1, {});
+    const lean = clamp(st / 1, 0, 1) * (st < 2.6 ? 1 : 0.5);
+    ctx.save(); ctx.translate(640, 470); ctx.rotate(lean * 0.3); ctx.translate(-640, -470);
+    drawCurly(640, 470, 1, { wag: curly.wag, open: st > 1 && st < 2, tongue: st >= 2, grin: st > 2.4 });
+    ctx.restore(); drawParticles();
+  } else if (scene === "give") {
+    drawOffice(false); drawGirl(860, 640, 1.15, { hold: true, gave });
+    const sm = gave && giveT > 0.8;
+    drawCurly(640, 470, 1, { wag: curly.wag, grin: sm, brush: sm, open: !gave, tongue: gave && !sm });
+    if (gave && giveT <= 0.8) { const k = giveT / 0.8; drawToothbrushIcon(lerp(786, 715, k), lerp(370, 400, k) - Math.sin(k * Math.PI) * 120, 1.1); }
+    if (sm) for (let i = 0; i < 4; i++) { const a = time * 2 + i * 1.6; ctx.globalAlpha = 0.5 + Math.sin(time * 7 + i) * 0.5; star(708 + Math.cos(a) * 40, 384 + Math.sin(a) * 26, 12, "#fff7a8"); } ctx.globalAlpha = 1;
+    if (!gave && st > 3) emoji("👆", 790, 450 + Math.sin(time * 6) * 12, 70);
+    drawParticles();
+  } else if (scene === "home") { drawHome(); drawParticles(); }
+  if (fade > 0) { ctx.fillStyle = `rgba(255,255,255,${fade})`; ctx.fillRect(-10, -10, W + 20, H + 20); }
+  ctx.restore();
+}
+function drawIcon() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#5cc8c0"; ctx.fillRect(0, 0, 512, 512);
+  for (const t of teeth) { t.dirt = 0; t.clean = true; }
+  ctx.setTransform(0.62, 0, 0, 0.62, 256 - MX * 0.62, 268 - 400 * 0.62); drawCurlyFace();
+  ctx.setTransform(1.6, 0, 0, 1.6, 400, 410); drawToothbrushIcon(0, 0, 1);
+}
+let lastT = performance.now(), frames = 0, fpsT = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  frames++; fpsT += dt; if (fpsT >= 1) { window.__fps = frames / fpsT; frames = 0; fpsT = 0; }
+  if (ICON) { time += dt; drawIcon(); requestAnimationFrame(loop); return; }
+  if (scene !== "start") { update(dt); musicTick(); } else { time += dt; curly.wag += dt * 10; }
+  draw(); requestAnimationFrame(loop);
+}
+makeTeeth(); curly.x = 300;
+requestAnimationFrame(loop);
+if (ICON) document.getElementById("start").style.display = "none";
+document.getElementById("play").addEventListener("click", () => {
+  initAudio();
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance(" ")); } catch (e) {}
+  document.getElementById("start").style.display = "none";
+  sfx.woof(); resetGame();
+});
+window.__g = () => ({ scene, st: +st.toFixed(1), stars, gapsDone: gaps.filter(g => g.done).length, foam: foam.length, gave, playAgain, said: lastSay,
+  teeth: teeth.map(t => [Math.round(t.x * scale + offX), Math.round(t.y * scale + offY), t.clean]), gaps: gaps.map(g => [Math.round(g.x * scale + offX), Math.round(g.y * scale + offY), g.done]),
+  curly: [Math.round(curly.x * scale + offX), Math.round((curly.y - 70) * scale + offY)], toScreen: [scale, offX, offY] });
+if ("serviceWorker" in navigator && !ICON) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
